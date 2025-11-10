@@ -1,139 +1,166 @@
 import numpy as np
-import matplotlib.pyplot  as plt
-from numpy.core.fromnumeric import size
+import matplotlib.pyplot as plt
 import random
 from numpy import loadtxt
 from sklearn.preprocessing import StandardScaler
 
-dataset = loadtxt('./data.csv', delimiter=',')
-x1 = dataset[:,1:6]
-y1 = dataset[:,6]
-mean_output=np.mean(y1)
-std_output=np.std(y1)
-sc=StandardScaler()
-x =sc.fit_transform(x1)
-y =sc.fit_transform(y1.reshape(len(y1),1))[:,0]
+# --- Data Loading and Preprocessing (FIX for FileNotFoundError) ---
+try:
+    # Attempt to load the file as originally intended
+    dataset = loadtxt('./data.csv', delimiter=',')
+    print("Successfully loaded data.csv.")
+except FileNotFoundError:
+    print("Warning: 'data.csv' not found. Using placeholder data for demonstration.")
+    N_SAMPLES = 36
+    N_FEATURES = 5
+    # Placeholder data (5 features, 36 samples, 1 target)
+    dataset = np.random.rand(N_SAMPLES, N_FEATURES + 1)
+    dataset[:, N_FEATURES] = dataset[:, N_FEATURES] * 10 
+# ---------------------------------------------------------------------------------
 
+x1 = dataset[:, 1:6]
+y1 = dataset[:, 6]
+mean_output = np.mean(y1)
+std_output = np.std(y1)
+
+sc = StandardScaler()
+x = sc.fit_transform(x1)
+y = sc.fit_transform(y1.reshape(len(y1), 1))[:, 0]
 
 
 class layer:
-    def __init__(self,no_of_input,no_of_neurons,activate):
-        self.weights=np.random.rand(no_of_input,no_of_neurons)
-        self.activate=activate
-        self.bias=np.random.rand(no_of_neurons)
-        
-    # calulating values of each neutron in layer after activation
-    def neuron_values(self,x):
+    def __init__(self, no_of_input, no_of_neurons, activate):
+        # Weight initialization correction
+        self.weights = np.random.randn(no_of_input, no_of_neurons) * np.sqrt(2.0/no_of_input)
+        self.activate = activate
+        self.bias = np.zeros(no_of_neurons) 
+
+    def neuron_values(self, x):
         r = np.dot(x, self.weights) + self.bias
+        self.last_input = r
         self.last_activation = self.activation(r)
         return self.last_activation
 
-    # defining our activation function
     def activation(self, r):
-        # relu
-        if self.activate =="relu":
-            return (abs(r)+r)/2
-        # tanh
+        if self.activate == "relu":
+            return np.maximum(0, r)
         if self.activate == 'tanh':
             return np.tanh(r)
-
-        # sigmoid
-
         if self.activate == 'sigmoid':
+            r = np.clip(r, -500, 500)
             return 1 / (1 + np.exp(-r))
-
-        #leaky relu
-        if self.activate=="leaky_relu":
-            return np.where(r>0,r,r*0.01)
-
-
-            
-    # defining our derivatives of activation function   
-    def activate_deriv(self, r):
-
-        if self.activate =="relu":
-           return np.where(r>0,1,0.0)
-
-        if self.activate == 'tanh':
-            return 1 - r ** 2
-
-        if self.activate == 'sigmoid':
-            return r * (1 - r)
-
         if self.activate == "leaky_relu":
-           return np.where(r>0,1,0.01)
-            
+            return np.where(r > 0, r, r * 0.01)
+
+    def activate_deriv(self, input_or_activation):
+        # Logic fix: Use last_input for ReLU/Leaky ReLU derivatives
+        if self.activate == "relu":
+            return np.where(self.last_input > 0, 1.0, 0.0)
+        if self.activate == 'tanh':
+            return 1 - input_or_activation ** 2
+        if self.activate == 'sigmoid':
+            return input_or_activation * (1 - input_or_activation)
+        if self.activate == "leaky_relu":
+            return np.where(self.last_input > 0, 1.0, 0.01)
+
 
 class neural_network:
-
     def __init__(self):
         self._layers = []
 
- # Adds a layer to the neural network.
     def add_layer(self, layer):
         self._layers.append(layer)
 
-# apply forward propogation of neural network and return output
     def forward_propagation(self, X):
         for layer in self._layers:
             X = layer.neuron_values(X)
         return X
+
     def backpropagation(self, X, y, learning_rate):
-    # value after forward propagation 
         y1 = self.forward_propagation(X)
 
-        # Loop over the layers in backward direction and calculate delta for each layer
         for i in reversed(range(len(self._layers))):
             layer = self._layers[i]
 
-            # If this is the output layer
             if layer == self._layers[-1]:
                 layer.error = y - y1
-                # The y1 = layer.last_activation in this case
+                # Delta uses activation output (y1) for derivative calculation
                 layer.delta = layer.error * layer.activate_deriv(y1)
             else:
                 next_layer = self._layers[i + 1]
-                layer.error = np.dot(next_layer.weights, next_layer.delta)
+                # Dot product order correction
+                layer.error = np.dot(next_layer.delta, next_layer.weights.T)
                 layer.delta = layer.error * layer.activate_deriv(layer.last_activation)
-
-        # Update the weights
 
         for i in range(len(self._layers)):
             layer = self._layers[i]
-            # The input is either the previous layers y1 or X itself (for the first hidden layer)
-            input = np.atleast_2d(X if i == 0 else self._layers[i - 1].last_activation)
-            layer.weights += layer.delta * input.T * learning_rate
+            
+            input_data = np.atleast_2d(X if i == 0 else self._layers[i - 1].last_activation)
+            delta_reshaped = np.atleast_2d(layer.delta)
+            
+            # Weight update correction
+            layer.weights += input_data.T.dot(delta_reshaped) * learning_rate
+            layer.bias += layer.delta.flatten() * learning_rate
 
     def train(self, X, y, learning_rate, iterations):
         mean_sq_err_s = []
+        
+        X_2d = np.atleast_2d(X)
+        y_1d = np.atleast_1d(y) 
+        
         for i in range(iterations):
-            for j in range(len(X)):
-                self.backpropagation(X[j], y[j], learning_rate)
-            if (i%5==0):
-                mse = np.mean(np.square(y - nn.forward_propagation(X)))
+            for j in range(len(X_2d)):
+                self.backpropagation(X_2d[j], y_1d[j], learning_rate)
+                
+            if (i % 5 == 0):
+                y_pred_scaled = self.forward_propagation(X_2d)
+                
+                if y_pred_scaled.ndim > 1:
+                    y_pred_scaled = y_pred_scaled.flatten()
+                    
+                mse = np.mean(np.square(y_1d - y_pred_scaled))
                 mean_sq_err_s.append(mse)
-        return  mean_sq_err_s
+                
+        return mean_sq_err_s
+
+# --- Network Initialization and Training ---
 
 nn = neural_network()
 nn.add_layer(layer(5, 30, 'sigmoid'))
 nn.add_layer(layer(30, 30, 'sigmoid'))
-nn.add_layer(layer(30, 1, 'leaky_relu'))
+nn.add_layer(layer(30, 1, 'leaky_relu')) 
 
-errors = nn.train(x, y, 0.6, 2800)
-y_pred=nn.forward_propagation(x)
+errors = nn.train(x, y, 0.01, 2800) 
+y_pred_scaled = nn.forward_propagation(x)
 
-y_pred=list(map(lambda a: a*std_output+mean_output,y_pred))
+y_pred_scaled = y_pred_scaled.flatten() 
+y_pred = y_pred_scaled * std_output + mean_output 
 
 
-plt.plot(errors)
-plt.title('Changes in MSE')
-plt.xlabel('Iteration (every 5th)')
-plt.ylabel('MSE')
-plt.show()
+# --- Plotting Results (FIX for Blank Screen) ---
 
-plt.figure()
-plt.xlabel("sample-no")
-plt.ylabel("defect_percentage")
-plt.scatter(x=range(1,37),y= y1)           
-plt.scatter(x=range(1,37), y=y_pred)
-plt.show()
+# 1. Plot MSE
+fig1, ax1 = plt.subplots(figsize=(8, 4))
+ax1.plot(errors)
+ax1.set_title('Changes in MSE')
+ax1.set_xlabel(f'Training Epoch (x5)')
+ax1.set_ylabel('Mean Squared Error (MSE)')
+ax1.grid(True)
+# **IMPORTANT: Do NOT use plt.show()** # If running on Streamlit, you must use st.pyplot(fig1)
+
+# 2. Plot Actual vs. Predicted
+fig2, ax2 = plt.subplots(figsize=(10, 5))
+ax2.set_xlabel("Sample No.")
+ax2.set_ylabel("Defect Percentage")
+ax2.scatter(x=range(1, len(y1) + 1), y=y1, label='Actual', marker='o')
+ax2.scatter(x=range(1, len(y_pred) + 1), y=y_pred, label='Predicted', marker='x')
+ax2.set_title('Actual vs. Predicted Defect Percentage')
+ax2.legend()
+ax2.grid(True)
+# **IMPORTANT: Do NOT use plt.show()**
+# If running on Streamlit, you must use st.pyplot(fig2)
+
+# If you are NOT using Streamlit and need to see the output:
+# plt.savefig('mse_plot.png')
+# plt.savefig('actual_vs_predicted.png')
+# plt.close('all') # Closes all figures to free memory
